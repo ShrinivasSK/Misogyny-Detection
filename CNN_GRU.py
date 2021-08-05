@@ -44,7 +44,8 @@ class CNN_GRU:
     def load_vec(self,emb_path, nmax=50000):
         vectors = []
         word2id = {}
-        with io.open(emb_path, 'r', encoding='utf-8', newline='\n', errors='ignore') as f:
+        with io.open(emb_path, 'r', encoding='utf-8', newline='\n', 
+                     errors='ignore') as f:
             next(f)
             for i, line in enumerate(f):
                 word, vect = line.rstrip().split(' ', 1)
@@ -56,44 +57,37 @@ class CNN_GRU:
                     break
         id2word = {v: k for k, v in word2id.items()}
         embeddings = np.vstack(vectors)
-        return embeddings, id2word, word2id
+        merged_vec = self.add_pad_unk(embeddings)
+        return merged_vec, id2word, word2id
     
-    
-    def pad_infinite(self,iterable, padding=None):
-        return chain(iterable, repeat(padding))
-    
-
-    def pad(self,iterable, size, padding=None):
-        return islice(self.pad_infinite(iterable, padding), size)
-    
-    
-    def encode_data(self,df,word2id):
-        max_len=0
-        for index,row in tqdm(df.iterrows(),total=len(df)):
-            
-            if(max_len<len(row['Text'].split(' '))):
-                max_len=len(row['Text'].split(' '))
-        
+    def encode_data(self,data,max_len):
         new_data=[]
         
-        
-        for index,row in df.iterrows():
-            list_token_id=[]
-            words=row['Text'].split(' ')
-            for word in words:
+        for row in tqdm(data):
+            encoded=[]
+            words=row.split(' ')
+            unk_index = len(list(self.word2id.keys()))
+            pad_index = unk_index+1
+            num = min(max_len,len(words))
+            for word in words[0:num]:
+                word=word.lower()
                 try:
-                    index=word2id[word]
+                    index=self.word2id[word]
                 except KeyError:
-                    index=len(list(word2id.keys()))
-                list_token_id.append(index)
-            with_padding_text=list(self.pad(list_token_id, max_len, len(list(word2id.keys()))+1))
-            new_data.append([with_padding_text,row['Label'],row['Text']])
+                    index=unk_index
+                encoded.append(index)
+            if(len(encoded)<max_len):
+                padding = [pad_index]*(max_len-len(encoded))
+                encoded.extend(padding)
+            else:
+                encoded=encoded[0:max_len]
+            new_data.append(encoded)
+                                                   
         return new_data
     
-    
     def add_pad_unk(self,vector):
-        pad_vec=np.random.randn(1,300) 
-        unk_vec=np.random.randn(1,300)
+        pad_vec = np.zeros((1,vector.shape[1])) 
+        unk_vec = np.mean(vector,axis=0,keepdims=True) 
         
         merged_vec=np.append(vector, unk_vec, axis=0)
         merged_vec=np.append(merged_vec, pad_vec, axis=0)
@@ -103,20 +97,19 @@ class CNN_GRU:
     ##-----------------------------------------------------------##
     ##------------------ Dataloader -----------------------------##
     ##-----------------------------------------------------------##
-    
-    def get_dataloader(self,samples, batch_size,is_train=False):
-        inputs = [ele[0] for ele in samples]
-        labels = [ele[1] for ele in samples]
+    def get_dataloader(self,X,Y, batch_size,max_len,is_train=False):
+        inputs = self.encode_data(X,max_len)
+        labels = Y
 
         inputs = torch.tensor(inputs)
         labels = torch.tensor(labels,dtype=torch.long)
 
         data = TensorDataset(inputs,labels)
 
-        if(is_train==False):
-            sampler = SequentialSampler(data)
+        if(is_train):
+            sampler = RandomSampler(data) 
         else:
-            sampler = RandomSampler(data)  
+            sampler = SequentialSampler(data)
 
         dataloader = DataLoader(data, sampler=sampler, batch_size=batch_size)
 
@@ -281,19 +274,21 @@ class CNN_GRU:
     ##------------------------ The Pipeline ---------------------##
     ##-----------------------------------------------------------##
     def run(self,args,df_train,df_val,df_test):
-        train_data=self.encode_data(df_train,self.word2id)
-        val_data=self.encode_data(df_val,self.word2id)
-        test_data=self.encode_data(df_test,self.word2id)
+        X_train = df_train['Text'].values
+        Y_train = df_train['Label'].values
+        X_test = df_test['Text'].values
+        Y_test = df_test['Label'].values
+        X_val = df_val['Text'].values
+        Y_val = df_val['Label'].values
+
+        train_dl = self.get_dataloader(X_train,Y_train,
+                        args['batch_size'],args['max_len'],True)
+        val_dl = self.get_dataloader(X_val,Y_val,args['batch_size'],
+                               args['max_len'])
+        test_dl = self.get_dataloader(X_test,Y_test,args['batch_size'],
+                                args['max_len'])
         
-        merged_vec = self.add_pad_unk(self.vector)
-        
-        args['model']['vocab_size'] = merged_vec.shape[1]
-        
-        train_dl = self.get_dataloader(train_data,args['batch_size'],True)
-        val_dl = self.get_dataloader(val_data,args['batch_size'],False)
-        test_dl = self.get_dataloader(test_data,args['batch_size'],False)
-        
-        model = CNN_GRU_Model(args['model'],merged_vec)
+        model = CNN_GRU_Model(args['model'],self.vector)
         
         optimiser=self.get_optimiser(args['learning_rate'],model)
         
@@ -304,18 +299,18 @@ class CNN_GRU:
     ##-----------------------------------------------------------##
     ##-------------------- Other Utilities ----------------------##
     ##-----------------------------------------------------------##
-    def run_test(self,model,df_test):
-        test_data=self.encode_data(df_test,self.word2id)
-        test_dl = self.get_dataloader(test_data,32,False)
+    def run_test(self,model,df_test,args):
+        X_test = df_test['Text'].values
+        Y_test = df_test['Label'].values
+
+        test_dl = self.get_dataloader(X_test,Y_test,32,
+                                args['max_len'])
+
         metrics = self.evaluate(model,test_dl,"Test")
         return metrics
     
     def load_model(self,path,args):
-        merged_vec = self.add_pad_unk(self.vector)
-
-        args['model']['vocab_size'] = merged_vec.shape[1]
-        
-        saved_model=CNN_GRU_Model(args['model'],merged_vec)
+        saved_model=CNN_GRU_Model(args['model'],self.vector)
         
         saved_model.load_state_dict(torch.load(path))
         

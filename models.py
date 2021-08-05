@@ -1,5 +1,6 @@
 # Basics
 import torch
+import numpy as np
 
 # Model
 import torch.nn as nn
@@ -11,10 +12,11 @@ class LSTM_Model(nn.Module):
         super(LSTM_Model, self).__init__()
         
         self.weights = weights
+        input_size = embs_np.shape[1]
 
         self.embedding = nn.Embedding.from_pretrained(torch.from_numpy(embs_np).float())
         self.dimension = dimension
-        self.lstm = nn.LSTM(input_size=100,
+        self.lstm = nn.LSTM(input_size=input_size,
                             hidden_size=dimension,
                             num_layers=1,
                             batch_first=True,
@@ -58,12 +60,13 @@ class CNN_GRU_Model(nn.Module):
     def __init__(self,args,vector):
         super(CNN_GRU_Model, self).__init__()
         self.embedsize = vector.shape[1]
+        self.vocab_size = vector.shape[0]
         self.conv1 = nn.Conv1d(self.embedsize,100, 2)
         self.conv2 = nn.Conv1d(self.embedsize,100, 3,padding=1)
         self.conv3 = nn.Conv1d(self.embedsize,100, 4,padding=2)
         self.maxpool1D = nn.MaxPool1d(4, stride=4)
         self.seq_model = nn.GRU(100, 100, bidirectional=False, batch_first=True)
-        self.embedding = nn.Embedding(args["vocab_size"], self.embedsize)
+        self.embedding = nn.Embedding(self.vocab_size, self.embedsize)
         self.embedding.weight = nn.Parameter(torch.tensor(vector.astype(np.float32), dtype=torch.float32))
         self.embedding.weight.requires_grad = args["train_embed"]
         self.num_labels=2

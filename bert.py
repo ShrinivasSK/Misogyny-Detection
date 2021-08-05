@@ -40,6 +40,9 @@ class BERT:
         self.weights=args['weights']
         
         self.tokenizer = BertTokenizer.from_pretrained(args['bert_model'])
+
+        self.model_save_path = args['model_save_path']
+        self.name = args['name']
         
     ##-----------------------------------------------------------##
     ##----------------- Utility Functions -----------------------##
@@ -225,6 +228,7 @@ class BERT:
     def train(self,model,data_loaders,optimiser,scheduler,epochs):
         train_stats = []
         train_loader,val_loader,test_loader = data_loaders
+        best_mf1Score=-1.0
         for epoch_i in range(0, epochs):
             print("")
             print('======== Epoch {:} / {:} ========'.format(epoch_i + 1, epochs))
@@ -243,6 +247,12 @@ class BERT:
             
             stats = {}
 
+            if(val_metrics['Val_mF1Score']>best_mf1Score):
+                best_mf1Score=val_metrics['Val_mF1Score']
+                torch.save(model.state_dict(), self.model_save_path+
+                        '/best_bert_'+self.name+'.pt')
+                test_metrics = self.evaluate(model,test_loader,"Test")
+
             stats['epoch']=epoch_i+1
 
             stats.update(train_metrics)
@@ -250,7 +260,7 @@ class BERT:
 
             train_stats.append(stats)
 
-        return train_stats
+        return train_stats,test_metrics
     
     ##-----------------------------------------------------------##
     ##----------------------- Main Pipeline ---------------------##
@@ -286,8 +296,34 @@ class BERT:
         
         scheduler = self.get_scheduler(args['epochs'],optimiser,train_dl)
         
-        train_stats = self.train(model,[train_dl,val_dl,test_dl],
+        train_stats,train_metrics = self.train(model,[train_dl,val_dl,test_dl],
                                 optimiser,scheduler,args['epochs'])
         
-        return train_stats
+        return train_stats,train_metrics
         
+    ##-----------------------------------------------------------##
+    ##-------------------- Other Utilities ----------------------##
+    ##-----------------------------------------------------------##
+    def run_test(self,model,df_test,args):
+        X_test = df_test['Text'].values
+        Y_test = df_test['Label'].values
+
+        test_data = self.encode(X_test,args['max_len'])
+
+        test_dl =self.get_dataloader(test_data,32)
+
+        metrics = self.evaluate(model,test_dl,"Test")
+
+        return metrics
+    
+    def load_model(self,path,args):
+        saved_model = BertForSequenceClassification.from_pretrained(
+                args['bert_model'], 
+                num_labels = 2, 
+                output_attentions = False, # Whether the model returns attentions weights.
+                output_hidden_states = False, # Whether the model returns all hidden-states.
+            )
+        
+        saved_model.load_state_dict(torch.load(path))
+        
+        return saved_model

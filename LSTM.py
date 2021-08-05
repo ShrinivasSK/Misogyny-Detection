@@ -1,5 +1,6 @@
 # Core
 import random
+import io
 
 # Basics
 import numpy as np
@@ -31,7 +32,7 @@ class LSTM:
                 
         self.device = torch.device(args['device'])
         
-        self.vocab2idx,self.embeddings = self.load_embeddings(args['embedding_path'])
+        self.embeddings,id2word,self.word2id = self.load_vec(args['embedding_path'])
 
         self.model_save_path = args['model_save_path']
         self.name = args['name']
@@ -39,52 +40,64 @@ class LSTM:
     ##----------------------------------------------------------##
     ##------------------- Utility Functions --------------------##
     ##----------------------------------------------------------##
-    def load_embeddings(self,path):
-        vocab2idx,embeddings = {},[]
-        with open(path,'rt') as f:
-            full_content = f.read().strip().split('\n')
-        
-        for i,line in tqdm(enumerate(full_content)):
-            word = line.split(' ')[0]
-            embedding = [float(val) for val in line.split(' ')[1:]]
-            vocab2idx[word]=i
-            embeddings.append(embedding)
-            
-        embs_np = np.array(embeddings)
-        
-        #embedding for '<pad>' token: 0s
-        pad_emb_np = np.zeros((1,embs_np.shape[1]))   
-        #embedding for '<unk>' token: mean
-        unk_emb_np = np.mean(embs_np,axis=0,keepdims=True) 
-        
-        embs_np = np.vstack((embs_np,pad_emb_np,unk_emb_np))
-        
-        vocab2idx['<unk>']=400001
-        vocab2idx['<pad>']=400000
-        
-        return vocab2idx,embs_np
+    def load_vec(self,emb_path, nmax=50000):
+        vectors = []
+        word2id = {}
+        with io.open(emb_path, 'r', encoding='utf-8', newline='\n', 
+                     errors='ignore') as f:
+            next(f)
+            for i, line in enumerate(f):
+                word, vect = line.rstrip().split(' ', 1)
+                vect = np.fromstring(vect, sep=' ')
+                assert word not in word2id, 'word found twice'
+                vectors.append(vect)
+                word2id[word] = len(word2id)
+                if len(word2id) == nmax:
+                    break
+        id2word = {v: k for k, v in word2id.items()}
+        embeddings = np.vstack(vectors)
+        merged_vec = self.add_pad_unk(embeddings)
+        return merged_vec, id2word, word2id
     
-    def encode(self,text,max_len):
-        encoded=[]
-        for word in text.split(' '):
-            word = word.lower()
-            try:
-                idx = self.vocab2idx[word]
-            except:
-                idx = self.vocab2idx['<unk>']
-            encoded.append(idx)
-        if(len(encoded)<max_len):
-            padding = [self.vocab2idx['<pad>']]*(max_len-len(encoded))
-            encoded.extend(padding)
-        else:
-            encoded=encoded[:max_len]
-        return encoded
+    def encode_data(self,data,max_len):
+        new_data=[]
+        
+        for row in tqdm(data):
+            encoded=[]
+            words=row.split(' ')
+            unk_index = len(list(self.word2id.keys()))
+            pad_index = unk_index+1
+            num = min(max_len,len(words))
+            for word in words[0:num]:
+                word=word.lower()
+                try:
+                    index=self.word2id[word]
+                except KeyError:
+                    index=unk_index
+                encoded.append(index)
+            if(len(encoded)<max_len):
+                padding = [pad_index]*(max_len-len(encoded))
+                encoded.extend(padding)
+            else:
+                encoded=encoded[0:max_len]
+            new_data.append(encoded)
+                                                   
+        return new_data
+    
+    def add_pad_unk(self,vector):
+        pad_vec = np.zeros((1,vector.shape[1])) 
+        unk_vec = np.mean(vector,axis=0,keepdims=True) 
+        
+        merged_vec=np.append(vector, unk_vec, axis=0)
+        merged_vec=np.append(merged_vec, pad_vec, axis=0)
+        
+        return merged_vec
     
     ##----------------------------------------------------------##
     ##---------------------- Data Loader -----------------------##
     ##----------------------------------------------------------## 
     def get_dataloader(self,X,Y,batch_size,max_len,is_train=False):
-        inputs = [self.encode(text,max_len) for text in X]
+        inputs = self.encode_data(X,max_len)
         labels = Y
 
         inputs = torch.tensor(inputs)
@@ -92,10 +105,10 @@ class LSTM:
 
         data = TensorDataset(inputs,labels)
 
-        if(is_train==False):
-            sampler = SequentialSampler(data)
+        if(is_train):
+            sampler = RandomSampler(data)
         else:
-            sampler = RandomSampler(data) 
+            sampler =  SequentialSampler(data) 
 
         dataloader = DataLoader(data, sampler=sampler, batch_size=batch_size)
 
@@ -240,7 +253,7 @@ class LSTM:
             if(val_metrics['Val_mF1Score']>best_mf1Score):
                 best_mf1Score=val_metrics['Val_mF1Score']
                 torch.save(model.state_dict(), self.model_save_path+
-                        '/best-cnn_gru_'+self.name+'.pt')
+                        '/best_lstm_'+self.name+'.pt')
                 test_metrics = self.evaluate(model,test_loader,"Test")
 
             stats = {}
@@ -280,3 +293,24 @@ class LSTM:
                             optimiser,args['epochs'])
                             
         return train_stats,test_metrics
+
+    ##-----------------------------------------------------------##
+    ##-------------------- Other Utilities ----------------------##
+    ##-----------------------------------------------------------##
+    def run_test(self,model,df_test,args):
+        X_test = df_test['Text'].values
+        Y_test = df_test['Label'].values
+
+        test_dl = self.get_dataloader(X_test,Y_test,32,
+                                args['max_len'])
+
+        metrics = self.evaluate(model,test_dl,"Test")
+
+        return metrics
+    
+    def load_model(self,path,args):
+        saved_model = LSTM_Model(args['weights'],self.embeddings)
+        
+        saved_model.load_state_dict(torch.load(path))
+        
+        return saved_model

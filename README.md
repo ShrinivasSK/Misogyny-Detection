@@ -1,5 +1,14 @@
 # Misogyny-Detection
 
 ## Note
-- You will have to add Muse Embeddings folder with the MUSE Embeddings of the languages before you run the CNN-GRU code
-They can be found [here](https://drive.google.com/drive/folders/11fcmO__PID2XDy69ROWOVGKYNasJ3ieK?usp=sharing)
+- Work on this project is still going on. I will update the files and the Readme when it is done. 
+
+## Some Preliminary Results
+
+### Results on Different Dataset Sizes
+(Some models are yet to be run)
+
+![table1](./Results/Different_Dataset_Sizes.png)
+
+### Zero Shot Performance of m-BERT trained on English
+![table1](./Results/Complete_Datasets.png)

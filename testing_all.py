@@ -11,6 +11,8 @@ from tqdm import tqdm
 
 from nltk.corpus import stopwords
 
+# from arabert.preprocess import ArabertPreprocessor
+
 # fix the random
 def fix_random(seed_val=42):
     random.seed(seed_val)
@@ -21,7 +23,7 @@ def fix_random(seed_val=42):
 # load dataset 
 # keep count of hate and non_hate data
 # equal to train_cnt in train set 
-def load_dataset(args,index,run):
+def load_dataset(args,index):
     # initialise constants 
     path = args['data_path']
     train_cnt = args['train_cnt']
@@ -30,15 +32,6 @@ def load_dataset(args,index,run):
     df_train = pd.read_csv(path+'train_'+str(index)+'.csv')
     df_val = pd.read_csv(path+'val_'+str(index)+'.csv')
     df_test = pd.read_csv(path+'test_'+str(index)+'.csv')
-    
-    # split train into hate and non-hate and take train_cnt
-    # samples of each
-    df_train_hate = df_train[df_train['Label'] == 1].sample(train_cnt,random_state=seeds[run-1])
-    df_train_non_hate = df_train[df_train['Label'] == 0].sample(train_cnt,random_state=seeds[run-1])
-    # concatenate hate and non_hate
-    df_train = pd.concat([df_train_hate, df_train_non_hate])
-    # shuffle the train data
-    df_train = df_train.sample(frac=1).reset_index(drop=True)
 
     # clean data
     df_train=clean_data(df_train,model_name)
@@ -50,10 +43,11 @@ def load_dataset(args,index,run):
 
 def clean_data(df,model_name):
     X = df['Text']
+#     prep = ArabertPreprocessor('bert-base-arabertv02')
     processer = Data_Preprocessing()
     X_new=[]
     if(model_name!='bert'):
-        stop_words = set(stopwords.words('italian'))
+        stop_words = set(stopwords.words('spanish'))
         for text in tqdm(X):
             text= processer.removeEmojis(text)
             text = processer.removeUrls(text)
@@ -67,14 +61,17 @@ def clean_data(df,model_name):
             text = processer.removeUrls(text)
             text=processer.removeSpecialChar(text)
             X_new.append(text)
+#     for text in tqdm(X):
+#         text = prep.preprocess(text)
+#         X_new.append(text)
     df['Text']=X_new
     return df 
 
 # Choose model
-def choose_model(name, index,run, train_cnt,run_args):
+def choose_model(name, index, train_cnt,run_args):
     args = argsAll[name]
 
-    args['name'] = str(index)+'_'+str(train_cnt)+'_'+str(run)
+    args['name'] = str(index)+'_'+str(train_cnt)
     args['model_save_path']=run_args['model_save_path']
 
     if(name == 'lstm'):
@@ -93,12 +90,12 @@ def save_metrics(path,metrics,which):
     df.to_csv(path+"_"+which+".csv")
 
 
-def train(args, index,run,all_test_metrics):
+def train(args, index,all_test_metrics):
     model_name = args['model_name']
     print("\tInitialising Model....")
-    model, model_args = choose_model(model_name,index,run,args['train_cnt'],args)
+    model, model_args = choose_model(model_name,index,args['train_cnt'],args)
     print("\tLoading Dataset....")
-    df_train, df_val, df_test = load_dataset(args,index,run)
+    df_train, df_val, df_test = load_dataset(args,index)
     print("\tTraining Starts....")
     if(model_name=='classic'):
         test_metrics = model.run(model_args,df_train,df_test)
@@ -107,8 +104,8 @@ def train(args, index,run,all_test_metrics):
                         df_train, df_val, df_test)
         
         # Save train metrics after generating path
-        res_path=args['res_base_path']+model_name+'_'+model_args['name']
-        save_metrics(res_path,train_metrics,"train")
+#         res_path=args['res_base_path']+model_name+'_'+model_args['name']
+#         save_metrics(res_path,train_metrics,"train")
     
     test_metrics['name']=model_args['name']
     
@@ -122,16 +119,14 @@ seeds = [43,44,45]
 def run(args):
     all_test_metrics=[]
     
-    for fold in folds:
-        print("Fold: ",fold)
-        # run thrice for each fold
-        for i in range(0,3):
-            fix_random(seeds[i])
-            print("Run: ",i+1)
-            train(args,fold,i+1,all_test_metrics)
-            print("Saving Test Metrics....")
-            save_metrics(args['res_base_path']+args['model_name']+
-                    '_'+str(args['train_cnt']),all_test_metrics,"test")
+#     for fold in folds:
+    fold=1
+    print("Fold: ",fold)
+    fix_random()
+    train(args,fold,all_test_metrics)
+#     print("Saving Test Metrics....")
+#     save_metrics(args['res_base_path']+args['model_name']+
+#             '_'+str(args['train_cnt']),all_test_metrics,"test")
 
 argsAll = {
     'lstm': {
@@ -142,23 +137,25 @@ argsAll = {
         'epochs': 20,
         'learning_rate': 1e-4,
         'device': 'cuda',
-        'embedding_path': "Embeddings/hin_codemixed.vec",
+        'embedding_path': "Embeddings/cc.ar.300.vec",
         'save_model': False,
     },
     'bert': {
         'seed_val': 42,
         'batch_size': 8,
+#         'bert_model': "aubmindlab/bert-base-arabertv02",
         'bert_model': "bert-base-multilingual-cased",
+#         'bert_model': "bert-base-uncased",
         'learning_rate': 2e-5,
         'epochs': 10,
         'max_len': 128,
         'device': 'cuda',
         'weights': [1.0, 1.0],
-        'save_model': False,
+        'save_model': True,
     },
     'cnn_gru': {
         'seed_val': 42,
-        'embedding_path': "Embeddings/hin_codemixed.vec",
+        'embedding_path': "Embeddings/cc.ar.300.vec",
         'batch_size': 8,
         'learning_rate': 1e-4,
         'epochs': 20,
@@ -181,16 +178,16 @@ argsAll = {
 
 run_args={
     'model_name':'bert',
-    'data_path':'Data_Processed/AMI-Spanish/',
+    'data_path':'Data_Processed/AMI-2020/',
     'train_cnt':256,
-    'res_base_path': 'Results/AMI-Spanish/',
-    'model_save_path': 'Saved_Models/AMI-Spanish/',
+    'res_base_path': 'Results/AMI-2020/all/',
+    'model_save_path': 'Saved_Models/AMI-2020/',
 }
 
-print("m-BERT")
+# for model in models[:-1]:
+model='bert'
+print(model)
+run_args['model_name']=model
 print('Data: ',run_args['data_path'].split('/')[-2])
-# for cnt in sizes:
-cnt=512
-print("Train Cnt: ",cnt)
-run_args['train_cnt']=cnt
+run_args['train_cnt']='all'
 run(run_args)

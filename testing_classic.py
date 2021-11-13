@@ -9,6 +9,8 @@ import torch
 import random
 from tqdm import tqdm
 
+from gensim.models import FastText
+
 from nltk.corpus import stopwords
 
 # fix the random
@@ -50,10 +52,10 @@ def load_dataset(args,index,run):
 
 def clean_data(df,model_name):
     X = df['Text']
-    processer = Data_Preprocessing()
+    processer = Data_Preprocessing('es_core_news_sm')
     X_new=[]
     if(model_name!='bert'):
-        stop_words = set(stopwords.words('italian'))
+        stop_words = set(stopwords.words('spanish'))
         for text in tqdm(X):
             text= processer.removeEmojis(text)
             text = processer.removeUrls(text)
@@ -102,6 +104,9 @@ def train(args, index,run,all_test_metrics):
     print("\tTraining Starts....")
     if(model_name=='classic'):
         test_metrics = model.run(model_args,df_train,df_test)
+        print("Saving Test Metrics....")
+        save_metrics(args['res_base_path']+args['model_name']+
+             '_'+str(args['train_cnt'])+'_'+str(index)+'_'+str(run),test_metrics,"test")
     else:
         train_metrics, test_metrics = model.run(model_args, 
                         df_train, df_val, df_test)
@@ -110,9 +115,9 @@ def train(args, index,run,all_test_metrics):
         res_path=args['res_base_path']+model_name+'_'+model_args['name']
         save_metrics(res_path,train_metrics,"train")
     
-    test_metrics['name']=model_args['name']
+        test_metrics['name']=model_args['name']
     
-    all_test_metrics.append(test_metrics)
+        all_test_metrics.append(test_metrics)
 
 sizes = [32, 64, 128, 256, 512]
 models = ['lstm', 'cnn_gru', 'bert','classic']
@@ -129,41 +134,42 @@ def run(args):
             fix_random(seeds[i])
             print("Run: ",i+1)
             train(args,fold,i+1,all_test_metrics)
-            print("Saving Test Metrics....")
-            save_metrics(args['res_base_path']+args['model_name']+
-                    '_'+str(args['train_cnt']),all_test_metrics,"test")
 
+
+# res_path = "Embeddings/hin_codemixed.model"
+# model_1 = FastText.load(res_path)
+            
 argsAll = {
     'lstm': {
         'seed_val': 42,
-        'batch_size': 8,
-        'max_len': 128,
+        'batch_size': 32,
+        'max_len': 1024,
         'weights': [1.0, 1.0],
-        'epochs': 20,
+        'epochs': 10,
         'learning_rate': 1e-4,
-        'device': 'cuda',
-        'embedding_path': "Embeddings/hin_codemixed.vec",
+        'device': 'cpu',
+        'embedding_path': "Embeddings/cc.en.300.vec",
         'save_model': False,
     },
     'bert': {
         'seed_val': 42,
-        'batch_size': 8,
+        'batch_size': 32,
         'bert_model': "bert-base-multilingual-cased",
         'learning_rate': 2e-5,
-        'epochs': 10,
-        'max_len': 128,
-        'device': 'cuda',
+        'epochs': 4,
+        'max_len': 256,
+        'device': 'cpu',
         'weights': [1.0, 1.0],
         'save_model': False,
     },
     'cnn_gru': {
         'seed_val': 42,
-        'embedding_path': "Embeddings/hin_codemixed.vec",
-        'batch_size': 8,
+        'embedding_path': "Embeddings/cc.en.300.vec",
+        'batch_size': 32,
         'learning_rate': 1e-4,
-        'epochs': 20,
-        'device': 'cuda',
-        'max_len': 128,
+        'epochs': 10,
+        'device': 'cpu',
+        'max_len': 1024,
         'model': {
             'train_embed': False,
             'weights': [1.0, 1.0],
@@ -171,26 +177,45 @@ argsAll = {
         'save_model': False,
     },
     'classic':{
-        'embedding': 'bow',
+        'embedding': 'w2v',
+        'embedding_path': "Embeddings/cc.en.300.vec",
+        'max_len': 128,
         'top_k': 20000,
+        'lang':'es',
         'seed_val':42,
-        'weights': [1.0,1.0],
+        'weights': {0:1,1:1},
         'save_model': False,
+#         'model': model_1,
     }
 }
 
+embeddings = ['bow','ngram','tfidf','fasttext','laser']
+
 run_args={
-    'model_name':'bert',
+    'model_name':'classic',
     'data_path':'Data_Processed/AMI-Spanish/',
-    'train_cnt':256,
-    'res_base_path': 'Results/AMI-Spanish/',
+    'train_cnt':32,
+    'res_path': 'Results/AMI-Spanish/Classic_laser/',
     'model_save_path': 'Saved_Models/AMI-Spanish/',
 }
 
-print("m-BERT")
+
+# print("yo")
+
+# for embedding in embeddings:
+embedding='laser'
+print("Embedding: ",embedding)
 print('Data: ',run_args['data_path'].split('/')[-2])
-# for cnt in sizes:
-cnt=512
-print("Train Cnt: ",cnt)
-run_args['train_cnt']=cnt
-run(run_args)
+argsAll['classic']['embedding']=embedding
+run_args['res_base_path']=run_args['res_path']
+
+for cnt in sizes:
+    print("Train Cnt: ",cnt)
+    run_args['train_cnt']=cnt
+    run(run_args)
+        
+
+# for cnt in sizes[3:]:
+#     print("Train Cnt: ",cnt)
+#     run_args['train_cnt']=cnt
+#     run(run_args)

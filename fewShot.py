@@ -28,7 +28,7 @@ from transformers import AdamW
 from transformers import BertForSequenceClassification
 import torch.nn as nn
 
-class BERT:
+class BERT_FewShot:
     def __init__(self,args):
         # fix the random
         random.seed(args['seed_val'])
@@ -282,6 +282,7 @@ class BERT:
     def train(self,model,data_loaders,optimiser,scheduler,epochs,save_model):
         # save train stats per epoch
         train_stats = []
+        test_stats=[]
         train_loader,val_loader,test_loader = data_loaders
         # maintain best mF1 Score to save best model
         best_mf1Score=-1.0
@@ -305,14 +306,17 @@ class BERT:
             
             stats = {}
 
-            # save model where validation mF1Score is best
-            if(val_metrics['Val_mF1Score']>best_mf1Score):
-                best_mf1Score=val_metrics['Val_mF1Score']
+            # evaluate model on alternate epochs
+#             if(val_metrics['Val_mF1Score']>best_mf1Score):
+            if(epoch_i%2==1):
+                print("Testing Model....")
+#                 best_mf1Score=val_metrics['Val_mF1Score']
                 if(save_model):
                     torch.save(model.state_dict(), self.model_save_path+
                         '/best_bert_'+self.name+'.pt')
-                # evaluate best model on test set
-                test_metrics = self.evaluate(model,test_loader,"Test")
+                # evaluate model on test set
+                test_metrics = self.evaluate(model,test_loader,self.name+str(epoch_i))
+                test_stats.append(test_metrics)
 
             stats['epoch']=epoch_i+1
 
@@ -323,7 +327,7 @@ class BERT:
 
             train_stats.append(stats)
 
-        return train_stats,test_metrics
+        return train_stats,test_stats
     
     ##-----------------------------------------------------------##
     ##----------------------- Main Pipeline ---------------------##
@@ -355,12 +359,13 @@ class BERT:
         test_dl =self.get_dataloader(test_data,args['batch_size'])
         
         # intialise model
-        model = BertForSequenceClassification.from_pretrained(
-                args['bert_model'], 
-                num_labels = 2, 
-                output_attentions = False, # Whether the model returns attentions weights.
-                output_hidden_states = False, # Whether the model returns all hidden-states.
-            )
+#         model = BertForSequenceClassification.from_pretrained(
+#                 args['bert_model'], 
+#                 num_labels = 2, 
+#                 output_attentions = False, # Whether the model returns attentions weights.
+#                 output_hidden_states = False, # Whether the model returns all hidden-states.
+#             )
+        model = self.load_model(args['model_path'],args)
         model.to(self.device)
         
         optimiser = self.get_optimiser(args['learning_rate'],model)
@@ -371,10 +376,10 @@ class BERT:
         # on each epoch. Store best model from all epochs 
         # (best mF1 Score on Val set) and evaluate it on
         # test set
-        train_stats,train_metrics = self.train(model,[train_dl,val_dl,test_dl],
+        train_stats,test_stats = self.train(model,[train_dl,val_dl,test_dl],
                                 optimiser,scheduler,args['epochs'],args['save_model'])
         
-        return train_stats,train_metrics
+        return train_stats,test_stats
         
     ##-----------------------------------------------------------##
     ##-------------------- Other Utilities ----------------------##
@@ -407,3 +412,102 @@ class BERT:
         saved_model.load_state_dict(torch.load(path))
         
         return saved_model
+    
+def load_dataset(args,index):
+    # initialise constants 
+    path = args['data_path']
+    # read dataframes
+    df_train = pd.read_csv(path+'train_'+str(index)+'.csv')
+    df_val = pd.read_csv(path+'val_'+str(index)+'.csv')
+    df_test = pd.read_csv(path+'test_'+str(index)+'.csv')
+
+    # clean data
+    df_train=preprocess(df_train,args['isArabic'])
+    df_val=preprocess(df_val,args['isArabic'])
+    df_test=preprocess(df_test,args['isArabic'])
+
+    return df_train, df_val, df_test
+
+def preprocess(df,isArabic):
+    
+    X = df['Text']
+    X_new=[]
+    if(isArabic):
+        prep = ArabertPreprocessor('bert-base-arabertv02')
+        for text in tqdm(X):
+            text = prep.preprocess(text)
+            X_new.append(text)
+    else:
+        processer = Data_Preprocessing()
+        for text in tqdm(X):
+            text= processer.removeEmojis(text)
+            text = processer.removeUrls(text)
+            text=processer.removeSpecialChar(text)
+            X_new.append(text)
+
+    df['Text']=X_new
+    return df 
+
+def save_metrics(path,metrics,which):
+    df = pd.DataFrame(metrics)
+    df.to_csv(path+"_"+which+".csv")
+    
+def fix_random(seed_val=42):
+    random.seed(seed_val)
+    np.random.seed(seed_val)
+    torch.manual_seed(seed_val)
+    torch.cuda.manual_seed_all(seed_val)
+    
+def train(args, index,all_test_metrics,model_args):
+    model_name = args['model_name']
+    model_args['name']=model_name+'_'+str(index+1)
+    print("\tInitialising Model....")
+    model = BERT_FewShot(model_args)
+    print("\tLoading Dataset....")
+    df_train, df_val, df_test = load_dataset(args,index)
+    print("\tTraining Starts....")
+    train_metrics, test_metrics = model.run(model_args, 
+                    df_train, df_val, df_test)
+
+    # Save train metrics after generating path
+    res_path=args['res_base_path']+model_name+'_'+model_args['name']
+    save_metrics(res_path,train_metrics,"train")
+    
+    all_test_metrics.extend(test_metrics)
+    
+def run(args,model_args):
+    all_test_metrics=[]
+    
+    for fold in [1, 2, 3, 4, 5]:
+        print("Fold: ",fold)
+        fix_random()
+        train(args,fold,all_test_metrics,model_args)
+        print("Saving Test Metrics....")
+        save_metrics(args['res_base_path']+args['model_name'],
+                     all_test_metrics,"")
+        
+run_args={
+    'model_name':'few_shot',
+    'data_path':'Data_Processed/Let-Mi/',
+    'train_cnt':256,
+    'res_base_path': 'Results/Let-Mi/fewShot/',
+    'model_save_path': 'Saved_Models/AMI-Spanish/',
+    'isArabic': True,
+}
+
+model_args={
+        'seed_val': 42,
+        'batch_size': 8,
+        'bert_model': "bert-base-multilingual-cased",
+        'learning_rate': 2e-5,
+        'epochs': 10,
+        'max_len': 128,
+        'device': 'cuda',
+        'weights': [1.0, 1.0],
+        'save_model': False,
+        'model_save_path': '',
+        'name': 'bert_one_shot',
+        'isArabic': False,
+        'model_path': "Saved_Models/Shared_Task_eng_1/best_bert_3_all.pt",
+    }
+run(run_args,model_args)

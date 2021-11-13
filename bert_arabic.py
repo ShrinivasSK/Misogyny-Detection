@@ -1,149 +1,126 @@
 # Core
 import random
-import io
 
 # Basics
 import numpy as np
 import pandas as pd
 import torch
 
+# Metrics
+from sklearn.metrics import *
+
+# Tokeniser
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, BertTokenizer
+
+from arabert.preprocess import ArabertPreprocessor
+
 # Utility
 from tqdm import tqdm
 
 # Dataloader
-from torch.utils.data import TensorDataset, DataLoader,RandomSampler, SequentialSampler
+from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+
+# Scheduler
+from transformers import get_linear_schedule_with_warmup
 
 # Optimiser
 from transformers import AdamW
 
-# Metrics
-from sklearn.metrics import *
-
 # Model
-from models import LSTM_Model
+from transformers import BertForSequenceClassification
+import torch.nn as nn
 
-class LSTM:
+class BERT:
     def __init__(self,args):
         # fix the random
         random.seed(args['seed_val'])
         np.random.seed(args['seed_val'])
         torch.manual_seed(args['seed_val'])
         torch.cuda.manual_seed_all(args['seed_val'])
-                
+        
         # set device
         self.device = torch.device(args['device'])
+
+        self.weights=args['weights']
         
-        # load embeddings
-        self.embeddings,id2word,self.word2id = self.load_vec(args['embedding_path'])
+        # initiliase tokeniser
+#         self.tokenizer = BertTokenizer.from_pretrained(args['bert_model'])
+        self.tokenizer = AutoTokenizer.from_pretrained(args['bert_model'])
+        self.prep = ArabertPreprocessor(args['bert_model'].split("/")[-1])
 
         self.model_save_path = args['model_save_path']
         self.name = args['name']
         
-    ##----------------------------------------------------------##
-    ##------------------- Utility Functions --------------------##
-    ##----------------------------------------------------------##
-    def load_vec(self,emb_path, nmax=50000):
-        vectors = []
-        word2id = {}
-        with io.open(emb_path, 'r', encoding='utf-8', newline='\n', 
-                     errors='ignore') as f:
-            next(f)
-            for i, line in enumerate(f):
-                # file is stored as <word> <array of floats>
-                word, vect = line.rstrip().split(' ', 1)
-                vect = np.fromstring(vect, sep=' ')
-                assert word not in word2id, 'word found twice'
-                vectors.append(vect)
-                word2id[word] = len(word2id)
-                if len(word2id) == nmax:
-                    break
-        id2word = {v: k for k, v in word2id.items()}
-        embeddings = np.vstack(vectors)
-        # add padding and unkown word embedding
-        merged_vec = self.add_pad_unk(embeddings)
-        return merged_vec, id2word, word2id
-    
-    def encode_data(self,data,max_len):
-        new_data=[]
+    ##-----------------------------------------------------------##
+    ##----------------- Utility Functions -----------------------##
+    ##-----------------------------------------------------------##
+    def encode(self,data,max_len):
+        input_ids = []
+        attention_masks = []
+        for sent in tqdm(data):
+            sent_prep = self.prep.preprocess(sent)
+            # use in-built tokeniser of Bert
+            encoded_dict = self.tokenizer.encode_plus(
+                            sent_prep,
+                            add_special_tokens =True, # for [CLS] and [SEP]
+                            max_length = max_len,
+                            truncation = True,
+                            padding = 'max_length',
+                            return_attention_mask = True,
+                            return_tensors = 'pt', # return pytorch tensors
+            )
+            input_ids.append(encoded_dict['input_ids'])
+            # attention masks notify where padding has been added 
+            # and where is the sentence
+            attention_masks.append(encoded_dict['attention_mask'])
         
-        for row in tqdm(data):
-            encoded=[]
-            words=row.split(' ')
-            # as unknown is added after all words
-            unk_index = len(list(self.word2id.keys()))
-            # and padding after that
-            pad_index = unk_index+1
-            # to minimise extra loops, run only till max_len
-            num = min(max_len,len(words))
-            for word in words[0:num]:
-                word=word.lower()
-                try:
-                    index=self.word2id[word]
-                except KeyError:
-                    # unkown word
-                    index=unk_index
-                encoded.append(index)
-            if(len(encoded)<max_len):
-                # add padding
-                padding = [pad_index]*(max_len-len(encoded))
-                encoded.extend(padding)
-            else:
-                # clip vector (although unneccessary here as 
-                # we decreased loop range)
-                encoded=encoded[0:max_len]
-            new_data.append(encoded)
-                                                   
-        return new_data
+        return [input_ids,attention_masks]
     
-    def add_pad_unk(self,vector):
-        # padding is zeros vector
-        pad_vec = np.zeros((1,vector.shape[1])) 
-        # unkown is average of all
-        unk_vec = np.mean(vector,axis=0,keepdims=True) 
-        
-        merged_vec=np.append(vector, unk_vec, axis=0)
-        merged_vec=np.append(merged_vec, pad_vec, axis=0)
-        
-        return merged_vec
-    
-    ##----------------------------------------------------------##
-    ##---------------------- Data Loader -----------------------##
-    ##----------------------------------------------------------## 
-    def get_dataloader(self,X,Y,batch_size,max_len,is_train=False):
-        # encode data
-        inputs = self.encode_data(X,max_len)
-        labels = Y
+    ##-----------------------------------------------------------##
+    ##------------------ Dataloader -----------------------------##
+    ##-----------------------------------------------------------##
+    def get_dataloader(self,samples, batch_size,is_train=False):
+        inputs,masks,labels = samples
 
-        # convert to tensors
-        inputs = torch.tensor(inputs)
-        labels = torch.tensor(labels,dtype=torch.long)
+        # Convert the lists into tensors.
+        inputs = torch.cat(inputs, dim=0)
+        masks = torch.cat(masks, dim=0)
+        labels = torch.tensor(labels)
 
-        # create dataset
-        data = TensorDataset(inputs,labels)
+        # convert to dataset
+        data = TensorDataset(inputs,masks,labels)
 
-        if(is_train):
-            # use random sampler for training to shuffle 
-            # train data 
-            sampler = RandomSampler(data)
+        if(is_train==False):
+            # use random sampler for training to shuffle
+            # train data
+            sampler = SequentialSampler(data)
         else:
             # order does not matter for validation as we just 
             # need the metrics
-            sampler =  SequentialSampler(data) 
+            sampler = RandomSampler(data)  
 
-        dataloader = DataLoader(data, sampler=sampler, batch_size=batch_size,drop_last=True)
+        dataloader = DataLoader(data, sampler=sampler, batch_size=batch_size)
 
         return dataloader
     
     ##-----------------------------------------------------------##
     ##----------------- Training Utilities ----------------------##
-    ##-----------------------------------------------------------##  
+    ##-----------------------------------------------------------## 
     def get_optimiser(self,learning_rate,model):
         # using AdamW optimiser from transformers library
         return AdamW(model.parameters(),
                   lr = learning_rate, 
                   eps = 1e-8
                 )
-        
+    
+    def get_scheduler(self,epochs,optimiser,train_dl):
+        total_steps = len(train_dl) * epochs
+        return get_linear_schedule_with_warmup(optimiser, 
+                num_warmup_steps = 0, 
+                num_training_steps = total_steps)
+    
     def evalMetric(self, y_true, y_pred, prefix):
         # calculate all the metrics and add prefix to them
         # before saving in dictionary
@@ -165,13 +142,12 @@ class LSTM:
             prefix+'non_recallScore': non_recallScore, 
             prefix+'non_precisionScore': non_precisionScore}
     
-    
     ##-----------------------------------------------------------##
     ##---------------- Different Train Loops --------------------##
     ##-----------------------------------------------------------## 
     def evaluate(self,model,loader,which):
         # to evaluate model on test and validation set
-    
+
         model.eval() # put model in eval mode
 
         # maintain total loss to save in metrics
@@ -183,13 +159,17 @@ class LSTM:
         y_true = np.empty(shape=(0),dtype='int')
 
         for batch in tqdm(loader):
-            # separate input and labels
-            b_inputs = batch[0].to(self.device)
-            b_labels = batch[1].to(self.device)
+            # separate input, labels and attention mask
+            b_input_ids = batch[0].to(self.device)
+            b_input_mask = batch[1].to(self.device)
+            b_labels = batch[2].to(self.device)
 
             with torch.no_grad(): # do not construct compute graph
-                outputs = model(b_inputs,b_labels)
-
+                outputs = model(b_input_ids, 
+                                   token_type_ids=None, 
+                                   attention_mask=b_input_mask,
+                                   labels=b_labels)
+            
             # output is always a tuple, thus we have to 
             # separate it manually
             loss = outputs[0]
@@ -201,8 +181,9 @@ class LSTM:
 
             # calculate true labels and convert it into numpy array
             b_y_true = b_labels.cpu().data.squeeze().numpy()
-
-            # calculate predicted labels by taking max of prediction scores
+            
+            # calculate predicted labels by taking max of 
+            # prediction scores
             b_y_pred = torch.max(logits,1)[1]
             b_y_pred = b_y_pred.cpu().data.squeeze().numpy()
 
@@ -220,10 +201,10 @@ class LSTM:
         return metrics
     
     
-    def run_train_loop(self,model,train_loader,optimiser):
+    def run_train_loop(self,model,train_loader,optimiser,scheduler):
 
         model.train() # put model in train mode
-        
+
         # maintain total loss to add to metric
         total_loss = 0
 
@@ -233,20 +214,34 @@ class LSTM:
         y_true = np.empty(shape=(0),dtype='int')
 
         for batch in tqdm(train_loader):
-            # separate inputs and labels
-            b_inputs = batch[0].to(self.device)
-            b_labels = batch[1].to(self.device)
+            # separate inputs, labels and attention mask
+            b_input_ids = batch[0].to(self.device)
+            b_input_mask = batch[1].to(self.device)
+            b_labels = batch[2].to(self.device)
 
             # Ref: https://stackoverflow.com/questions/48001598/why-do-we-need-to-call-zero-grad-in-pytorch#:~:text=In%20PyTorch%20%2C%20we%20need%20to,backward()%20call.
-            model.zero_grad()        
+            model.zero_grad()   
 
-            outputs = model(b_inputs,b_labels)
+            outputs = model(b_input_ids, 
+                             token_type_ids=None, 
+                             attention_mask=b_input_mask, 
+                             labels=b_labels)
+            
+            
 
             # outputs is always returned as tuple
             # Separate it manually
-            loss = outputs[0]
             logits = outputs[1]
 
+            # define new loss function so that we can include
+            # weights
+            loss_fct = nn.CrossEntropyLoss(weight=torch.tensor(
+                        self.weights,dtype=torch.float)).to(self.device)
+            
+            
+            
+            loss = loss_fct(logits,b_labels)
+            
             # calculate current loss
             # loss.item() extracts loss value as a float
             total_loss += loss.item()
@@ -271,13 +266,16 @@ class LSTM:
 
             # gradient descent
             optimiser.step()
+            
+            # schedule learning rate accordingly
+            scheduler.step()
 
         # calculate avg loss 
         avg_train_loss = total_loss / len(train_loader)
 
         # calculate metrics
         train_metrics = self.evalMetric(y_true,y_pred,"Train_")
-
+        
         # print results
         print('avg_train_loss',avg_train_loss)
         print('train_f1Score',train_metrics['Train_f1Score'])
@@ -292,7 +290,7 @@ class LSTM:
     ##------------------------------------------------------------##
     ##----------------- Main Train Loop --------------------------##
     ##------------------------------------------------------------##
-    def train(self,model,data_loaders,optimiser,epochs,save_model):
+    def train(self,model,data_loaders,optimiser,scheduler,epochs,save_model):
         # save train stats per epoch
         train_stats = []
         train_loader,val_loader,test_loader = data_loaders
@@ -305,7 +303,8 @@ class LSTM:
             print("")
             print('Training...')
             # run trian loop
-            train_metrics = self.run_train_loop(model,train_loader,optimiser)
+            train_metrics = self.run_train_loop(model,train_loader,
+                                            optimiser,scheduler)
 
             print("")
             print("Running Validation...") 
@@ -315,16 +314,16 @@ class LSTM:
             print("Validation Loss: ",val_metrics['Val_avg_loss'])
             print("Validation Accuracy: ",val_metrics['Val_accuracy'])
             
+            stats = {}
+
             # save model where validation mF1Score is best
             if(val_metrics['Val_mF1Score']>best_mf1Score):
                 best_mf1Score=val_metrics['Val_mF1Score']
                 if(save_model):
                     torch.save(model.state_dict(), self.model_save_path+
-                        '/best_lstm_'+self.name+'.pt')
+                        '/best_bert_'+self.name+'.pt')
                 # evaluate best model on test set
                 test_metrics = self.evaluate(model,test_loader,"Test")
-
-            stats = {}
 
             stats['epoch']=epoch_i+1
 
@@ -338,7 +337,7 @@ class LSTM:
         return train_stats,test_metrics
     
     ##-----------------------------------------------------------##
-    ##--------------------- The Pipeline ------------------------##
+    ##----------------------- Main Pipeline ---------------------##
     ##-----------------------------------------------------------##
     def run(self,args,df_train,df_val,df_test):
         # get X and Y data points 
@@ -349,31 +348,44 @@ class LSTM:
         X_val = df_val['Text'].values
         Y_val = df_val['Label'].values
         
-        # convert them to data loaders
-        # encoding input done here
-        train_dl = self.get_dataloader(X_train,Y_train,
-                        args['batch_size'],args['max_len'],True)
-        val_dl = self.get_dataloader(X_val,Y_val,args['batch_size'],
-                               args['max_len'])
-        test_dl = self.get_dataloader(X_test,Y_test,args['batch_size'],
-                                args['max_len'])
+        # encode data
+        # returns list of data and attention masks
+        train_data = self.encode(X_train,args['max_len'])
+        val_data = self.encode(X_val,args['max_len'])
+        test_data = self.encode(X_test,args['max_len'])
         
-        # initialise model
-        model = LSTM_Model(args['weights'],self.embeddings,self.device)
+        # add labels to data so that we can send them to
+        # dataloader function together
+        train_data.append(Y_train)
+        val_data.append(Y_val)
+        test_data.append(Y_test)
         
+        # convert to dataloader
+        train_dl =self.get_dataloader(train_data,args['batch_size'],True)
+        val_dl =self.get_dataloader(val_data,args['batch_size'])                          
+        test_dl =self.get_dataloader(test_data,args['batch_size'])
+        
+        # intialise model
+        model = AutoModelForSequenceClassification.from_pretrained(
+            args['bert_model'],
+            output_attentions = False, # Whether the model returns attentions weights.
+            output_hidden_states = False, # Whether the model returns all hidden-states.
+             )
         model.to(self.device)
         
-        optimiser =self.get_optimiser(args['learning_rate'],model)
+        optimiser = self.get_optimiser(args['learning_rate'],model)
+        
+        scheduler = self.get_scheduler(args['epochs'],optimiser,train_dl)
         
         # Run train loop and evaluate on validation data set
         # on each epoch. Store best model from all epochs 
         # (best mF1 Score on Val set) and evaluate it on
         # test set
-        train_stats,test_metrics = self.train(model,[train_dl,val_dl,test_dl],
-                            optimiser,args['epochs'],args['save_model'])
-                            
-        return train_stats,test_metrics
-
+        train_stats,train_metrics = self.train(model,[train_dl,val_dl,test_dl],
+                                optimiser,scheduler,args['epochs'],args['save_model'])
+        
+        return train_stats,train_metrics
+        
     ##-----------------------------------------------------------##
     ##-------------------- Other Utilities ----------------------##
     ##-----------------------------------------------------------##
@@ -383,8 +395,11 @@ class LSTM:
         X_test = df_test['Text'].values
         Y_test = df_test['Label'].values
 
-        test_dl = self.get_dataloader(X_test,Y_test,32,
-                                args['max_len'])
+        test_data = self.encode(X_test,args['max_len'])
+
+        test_data.append(Y_test)
+
+        test_dl =self.get_dataloader(test_data,32)
 
         metrics = self.evaluate(model,test_dl,"Test")
 
@@ -392,7 +407,12 @@ class LSTM:
     
     def load_model(self,path,args):
         # load saved best model
-        saved_model = LSTM_Model(args['weights'],self.embeddings)
+        saved_model = BertForSequenceClassification.from_pretrained(
+                args['bert_model'], 
+                num_labels = 2, 
+                output_attentions = False, # Whether the model returns attentions weights.
+                output_hidden_states = False, # Whether the model returns all hidden-states.
+            )
         
         saved_model.load_state_dict(torch.load(path))
         

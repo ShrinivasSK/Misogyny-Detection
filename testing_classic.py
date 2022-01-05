@@ -136,7 +136,7 @@ def run(args):
             train(args,fold,i+1,all_test_metrics)
 
 
-# res_path = "Embeddings/hin_codemixed.model"
+# res_path = "Embeddings/hin_codemixed.model" # Uncomment for Code-Mixed Classical Fasttext
 # model_1 = FastText.load(res_path)
             
 argsAll = {
@@ -185,7 +185,7 @@ argsAll = {
         'seed_val':42,
         'weights': {0:1,1:1},
         'save_model': False,
-#         'model': model_1,
+        # 'model': model_1,   # Uncomment for Code-Mixed Classical Fasttext
     }
 }
 
@@ -200,9 +200,6 @@ run_args={
 }
 
 
-# print("yo")
-
-# for embedding in embeddings:
 embedding='laser'
 print("Embedding: ",embedding)
 print('Data: ',run_args['data_path'].split('/')[-2])
@@ -214,8 +211,3 @@ for cnt in sizes:
     run_args['train_cnt']=cnt
     run(run_args)
         
-
-# for cnt in sizes[3:]:
-#     print("Train Cnt: ",cnt)
-#     run_args['train_cnt']=cnt
-#     run(run_args)

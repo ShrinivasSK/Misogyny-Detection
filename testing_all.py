@@ -43,7 +43,7 @@ def load_dataset(args,index):
 
 def clean_data(df,model_name):
     X = df['Text']
-#     prep = ArabertPreprocessor('bert-base-arabertv02')
+#     prep = ArabertPreprocessor('bert-base-arabertv02') # for arabic Uncomment
     processer = Data_Preprocessing()
     X_new=[]
     if(model_name!='bert'):
@@ -61,7 +61,7 @@ def clean_data(df,model_name):
             text = processer.removeUrls(text)
             text=processer.removeSpecialChar(text)
             X_new.append(text)
-#     for text in tqdm(X):
+#     for text in tqdm(X):              # For Arabic Uncomment
 #         text = prep.preprocess(text)
 #         X_new.append(text)
     df['Text']=X_new
@@ -104,8 +104,8 @@ def train(args, index,all_test_metrics):
                         df_train, df_val, df_test)
         
         # Save train metrics after generating path
-#         res_path=args['res_base_path']+model_name+'_'+model_args['name']
-#         save_metrics(res_path,train_metrics,"train")
+        res_path=args['res_base_path']+model_name+'_'+model_args['name']
+        save_metrics(res_path,train_metrics,"train")
     
     test_metrics['name']=model_args['name']
     
@@ -119,14 +119,13 @@ seeds = [43,44,45]
 def run(args):
     all_test_metrics=[]
     
-#     for fold in folds:
-    fold=1
-    print("Fold: ",fold)
-    fix_random()
-    train(args,fold,all_test_metrics)
-#     print("Saving Test Metrics....")
-#     save_metrics(args['res_base_path']+args['model_name']+
-#             '_'+str(args['train_cnt']),all_test_metrics,"test")
+    for fold in folds:
+        print("Fold: ",fold)
+        fix_random()
+        train(args,fold,all_test_metrics)
+        print("Saving Test Metrics....")
+        save_metrics(args['res_base_path']+args['model_name']+
+                '_'+str(args['train_cnt']),all_test_metrics,"test")
 
 argsAll = {
     'lstm': {

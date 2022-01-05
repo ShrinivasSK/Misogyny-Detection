@@ -359,12 +359,6 @@ class BERT_FewShot:
         test_dl =self.get_dataloader(test_data,args['batch_size'])
         
         # intialise model
-#         model = BertForSequenceClassification.from_pretrained(
-#                 args['bert_model'], 
-#                 num_labels = 2, 
-#                 output_attentions = False, # Whether the model returns attentions weights.
-#                 output_hidden_states = False, # Whether the model returns all hidden-states.
-#             )
         model = self.load_model(args['model_path'],args)
         model.to(self.device)
         

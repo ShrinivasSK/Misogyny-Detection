@@ -26,7 +26,7 @@ Here are a few samples of Hate and Non Hate samples from the English, Italian an
 5. Spanish | AMI-Spanish
 6. Italian | AMI-2020
 
-### Experiments and Results
+### Experimentation and Results
 
 We have done a thorough analysis of the performance of the deep learning models on the above languages by trying out various settings which I have explained below. 
 

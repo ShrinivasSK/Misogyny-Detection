@@ -8,7 +8,4 @@
 ### Results on Different Dataset Sizes
 (Some models are yet to be run)
 
-![table1](./Results/Different_Dataset_Sizes.png)
-
-### Zero Shot Performance of m-BERT trained on English
-![table1](./Results/Complete_Datasets.png)
+![table1](./Images/Different_Dataset_Sizes.png)

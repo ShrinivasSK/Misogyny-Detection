@@ -1,3 +1,4 @@
 Embeddings/**
 .ipynb_checkpoints/**
 .vscode/**
+Results/**
